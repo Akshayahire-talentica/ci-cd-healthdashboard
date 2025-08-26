@@ -2,6 +2,8 @@
 
 A local dashboard that polls **GitHub Actions** across all repositories you can access, stores run data in **PostgreSQL**, shows a **React + Tailwind** UI, and sends **Slack** alerts for **success** and **failure** (configurable). Runs entirely on your machine via **Docker Compose**—no cloud required.
 
+---
+
 ## Table of Contents
 
 1. [Overview](#overview)  
@@ -19,7 +21,7 @@ A local dashboard that polls **GitHub Actions** across all repositories you can 
 13. [Project Structure](#project-structure)  
 14. [Updating & Rebuilding](#updating--rebuilding)  
 15. [Uninstall / Cleanup](#uninstall--cleanup)  
-16. [FAQ](#faq)  
+ 
 
 ---
 
@@ -124,4 +126,133 @@ HTTP_PROXY=
 HTTPS_PROXY=
 ```
 
-... (continues with Ports, Build & Run, Verifying, Slack Alerts, Troubleshooting, etc.)
+---
+
+## Ports
+
+- **Frontend**: `http://localhost:${FRONTEND_PORT}` (default: **3001**)  
+- **API**: `http://localhost:${API_PORT}` (default: **8080**)  
+- **Nginx** in container always listens on `80`; host port is configurable via `FRONTEND_PORT`.
+
+---
+
+## Build & Run
+
+```bash
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+docker compose up -d --build
+```
+
+Check status:
+```bash
+docker compose ps
+```
+
+---
+
+## Verifying the Setup
+
+- UI: `http://localhost:3001`  
+- API Docs: `http://localhost:8080/docs`  
+- Health: `http://localhost:8080/health`  
+
+Smoke tests:
+```bash
+curl "http://localhost:8080/api/repos"
+curl "http://localhost:8080/api/metrics/overview?windowDays=7"
+```
+
+---
+
+## Slack Alerts Behavior
+
+- Alerts are **idempotent** (once per run/type).  
+- Only fire when `status=completed` and `conclusion in {success,failure}`.  
+- Toggled via `.env` (`ALERT_SUCCESS_ENABLED`, `ALERT_FAILURE_ENABLED`).  
+- Mentions: `ALERT_CHANNEL_MENTIONS=channel|here|""`.  
+- Log snippet optional.
+
+---
+
+## GitHub Token & Rate Limits
+
+- GitHub API limit: **5000 requests/hour**.  
+- Tune with `POLL_SHARDS`, `MAX_RUNS_PER_REPO`, `POLL_INTERVAL_SECONDS`.  
+
+---
+
+## Troubleshooting
+
+- **Frontend blank** → check Nginx proxy `/api/`.  
+- **Ports in use** → change in `.env`.  
+- **Slow build** → pre-pull base images, use WSL Linux FS.  
+- **No Slack alerts** → verify URL & env.  
+- **Duplicates** → ensure Alert table is present.  
+- **No data** → check PAT scopes, repo has runs.
+
+---
+
+## Common Docker Commands
+
+```bash
+docker compose up -d
+docker compose down
+docker compose logs -f api
+docker compose logs -f frontend
+docker compose build --no-cache api
+docker compose ps
+```
+
+---
+
+## Project Structure
+
+```
+.
+├─ backend/
+│  ├─ app/
+│  │  ├─ main.py
+│  │  ├─ config.py
+│  │  ├─ database.py
+│  │  ├─ models.py
+│  │  ├─ github.py
+│  │  ├─ ingestor.py
+│  │  ├─ metrics.py
+│  │  ├─ routes.py
+│  │  ├─ logs.py
+│  │  └─ slack.py
+│  └─ Dockerfile
+├─ frontend/
+│  ├─ src/
+│  │  ├─ pages/Dashboard.tsx
+│  │  └─ styles.css
+│  ├─ nginx.conf
+│  └─ Dockerfile
+├─ docker-compose.yml
+├─ .env.template
+└─ README.md
+```
+
+---
+
+## Updating & Rebuilding
+
+```bash
+docker compose build --no-cache api && docker compose up -d
+docker compose build --no-cache frontend && docker compose up -d
+docker compose up -d --build
+```
+
+---
+
+## Uninstall / Cleanup
+
+```bash
+docker compose down
+docker volume rm cicd_dashboard_pgdata cicd_dashboard_runlogs
+```
+
+---
+
+
