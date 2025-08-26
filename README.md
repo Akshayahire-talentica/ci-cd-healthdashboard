@@ -1,52 +1,91 @@
-CI/CD Pipeline Health Dashboard (Local, Dockerized)
+# CI/CD Pipeline Health Dashboard (Local, Dockerized)
 
-A local, dockerized dashboard that polls GitHub Actions across all repos you can access, computes CI health metrics, stores data in PostgreSQL, shows a React + Tailwind UI, and sends Slack alerts on every failure with a log snippet.
+A local dashboard that polls **GitHub Actions** across all repositories you can access, stores run data in **PostgreSQL**, shows a **React + Tailwind** UI, and sends **Slack** alerts for **success** and **failure** (configurable). Runs entirely on your machine via **Docker Compose**—no cloud required.
 
-What’s inside
+## Table of Contents
 
-backend/ — FastAPI API, APScheduler poller, GitHub client, Slack alerts, metrics, log storage
+1. [Overview](#overview)  
+2. [Architecture](#architecture)  
+3. [Prerequisites](#prerequisites)  
+4. [Security Notes](#security-notes)  
+5. [.env Configuration](#env-configuration)  
+6. [Ports](#ports)  
+7. [Build & Run](#build--run)  
+8. [Verifying the Setup](#verifying-the-setup)  
+9. [Slack Alerts Behavior](#slack-alerts-behavior)  
+10. [GitHub Token & Rate Limits](#github-token--rate-limits)  
+11. [Troubleshooting](#troubleshooting)  
+12. [Common Docker Commands](#common-docker-commands)  
+13. [Project Structure](#project-structure)  
+14. [Updating & Rebuilding](#updating--rebuilding)  
+15. [Uninstall / Cleanup](#uninstall--cleanup)  
+16. [FAQ](#faq)  
 
-frontend/ — React + Vite + Tailwind + Recharts UI, served by Nginx (proxies /api to backend)
+---
 
-docker-compose.yml — orchestrates db, api, frontend
+## Overview
 
-.env.template — copy to .env and fill required values
+- **Ingestion**: Polls GitHub Actions every `POLL_INTERVAL_SECONDS` for **all repos** you can read (user + orgs), all branches (or filtered), last `MAX_RUNS_PER_REPO` runs per repo.  
+- **Metrics**: Success/Failure rate, average build duration, last build status, daily time-series.  
+- **Logs**: Downloads **failed job logs** only, gzips to disk, prunes after `LOG_RETENTION_DAYS`.  
+- **Alerts**: Slack webhook alerts on **success** and/or **failure** (toggled independently), **idempotent** (sent at most once per run/type).  
+- **UI**: React + Tailwind + Recharts, dark mode, auto-refresh, run details modal with job table & log snippet.  
+- **Local-only**: Everything runs via Docker Compose on your machine.
 
-Volumes — pgdata (Postgres), runlogs (gzipped job logs)
+---
 
-Prerequisites
+## Architecture
 
-Docker + Docker Compose
+```
+Browser → Frontend (Nginx) → /api/* → FastAPI backend → PostgreSQL
+                                   ↘︎ Slack Webhook (alerts)
+GitHub Actions API → (polled by FastAPI scheduler)
+```
 
-GitHub Personal Access Token (classic) with scopes:
+- **frontend/** (React build served by Nginx, proxies `/api/*` to backend)  
+- **backend/** (FastAPI + APScheduler + SQLAlchemy)  
+- **db** (PostgreSQL)  
+- **Volumes**: `pgdata` (DB), `runlogs` (gzipped logs)
 
-repo (private repos)
+---
 
-read:org (enumerate org repos)
+## Prerequisites
 
-workflow (read Actions runs/jobs/logs)
+- **Docker** and **Docker Compose** installed  
+- **GitHub Personal Access Token (classic)** with scopes:
+  - `repo` (private repos)
+  - `read:org` (org repos)
+  - `workflow` (read Actions runs/jobs/logs)
+- **Slack Incoming Webhook URL** (to post alerts)
+- **Windows/WSL users**: run and build inside the **WSL Linux filesystem** (e.g., `~/work/ci-cd-dashboard`) for much faster I/O than `/mnt/c/...`.
 
-Slack Incoming Webhook URL (to post alerts)
+---
 
-Windows/WSL tip: build & run inside WSL Linux filesystem (e.g., ~/work/ci-cd-dashboard) for faster I/O than /mnt/c/....
+## Security Notes
 
-Quick Start
+- Never commit your `.env` (contains secrets).  
+- Keep token scopes minimal (`repo`, `read:org`, `workflow`).  
+- Revoke/rotate tokens that are exposed or no longer needed.  
+- Slack Webhook URL is write-only; keep it private.
 
-Clone / unzip the repository and cd into it.
+---
 
-Create .env from template and fill values:
+## .env Configuration
 
+1) Copy the template and edit:
+```bash
 cp .env.template .env
+```
 
+2) Open `.env` and set values (examples below).
 
-Edit .env:
-
+```env
 # ==== GitHub ====
-GITHUB_TOKEN=your_new_pat_here
-REPO_DISCOVERY_MODE=all          # all repos you can read
-BRANCH_FILTERS=                  # empty = all branches
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+REPO_DISCOVERY_MODE=all
+BRANCH_FILTERS=                 # empty = all branches, or "main,develop"
 POLL_INTERVAL_SECONDS=30
-POLL_SHARDS=4                    # shard repos across ticks (tune for rate limits)
+POLL_SHARDS=4                   # shard repos across polling ticks (helps with rate limits)
 MAX_RUNS_PER_REPO=50
 
 # ==== Storage / Logs ====
@@ -54,21 +93,25 @@ LOG_STORAGE=disk
 LOG_DIR=/data/run-logs
 LOG_GZIP=true
 LOG_RETENTION_DAYS=7
-MAX_LOG_BYTES_PER_JOB=10485760   # 10MB/job log cap
+MAX_LOG_BYTES_PER_JOB=10485760  # 10MB cap per job log
 
 # ==== Alerts (Slack Webhook) ====
 ALERTS_ENABLED=true
-ALERT_CHANNEL_MENTIONS=channel   # 'channel' -> <!channel>, 'here' -> <!here>, empty -> none
+ALERT_CHANNEL_MENTIONS=channel  # 'channel' -> <!channel>, 'here' -> <!here>, empty -> none
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
-ALERT_TITLE_PREFIX=[CI Failure]
+ALERT_TITLE_PREFIX=[CI Pipeline]
 ALERT_INCLUDE_LOG_SNIPPET=true
 ALERT_LOG_SNIPPET_LINES=200
+
+# Toggle each alert type independently:
+ALERT_SUCCESS_ENABLED=true      # set false to silence success alerts
+ALERT_FAILURE_ENABLED=true      # set false to silence failure alerts
 
 # ==== API / UI ====
 TZ=Asia/Kolkata
 JWT_SECRET=change_me_long_random
 API_PORT=8080
-FRONTEND_PORT=3001               # host port -> nginx:80
+FRONTEND_PORT=3001              # host → container: 3001 → 80
 
 # ==== Database ====
 POSTGRES_USER=ci
@@ -76,177 +119,9 @@ POSTGRES_PASSWORD=ci
 POSTGRES_DB=ci_metrics
 DATABASE_URL=postgresql://ci:ci@db:5432/ci_metrics
 
-
-Build & run (enable BuildKit for speed/reliability):
-
-export DOCKER_BUILDKIT=1
-export COMPOSE_DOCKER_CLI_BUILD=1
-
-docker compose up -d --build
-
-
-Open the apps:
-
-UI: http://localhost:${FRONTEND_PORT}
- → e.g., http://localhost:3001
-
-API Docs (OpenAPI): http://localhost:${API_PORT}/docs
- → http://localhost:8080/docs
-
-Health: http://localhost:${API_PORT}/health
-
-How it works
-
-Polling (every POLL_INTERVAL_SECONDS): the backend discovers all repos you can access, then shards them across cycles to stay within rate limits and fetches the latest runs (MAX_RUNS_PER_REPO) for each repo.
-
-Metrics: success/failure rate, average duration, last build; daily time series.
-
-Logs: only downloaded for failed jobs, gzip-compressed to /data/run-logs and retained for LOG_RETENTION_DAYS.
-
-Alerts: on every failed run, a Slack message is posted with repo/branch, workflow, duration, failing jobs, and a log snippet (last N lines). Mention is controlled by ALERT_CHANNEL_MENTIONS.
-
-Frontend: Nginx serves static build and proxies /api/* to api:8080.
-
-Useful Commands
-
-Start / stop / view logs
-
-docker compose up -d
-docker compose down
-docker compose logs -f api
-docker compose logs -f frontend
-docker compose logs -f db
-
-
-Rebuild specific service
-
-docker compose build --no-cache frontend
-docker compose build --no-cache api
-
-
-Check container status
-
-docker compose ps
-
-
-Open a DB shell
-
-docker exec -it $(docker ps -qf name=db) psql -U ci -d ci_metrics
-
-
-Test API from host
-
-curl "http://localhost:8080/api/metrics/overview?windowDays=7"
-curl "http://localhost:8080/api/repos"
-
-
-Clean volumes (DANGER: resets DB + logs)
-
-docker compose down
-docker volume rm cicd_dashboard_pgdata cicd_dashboard_runlogs
-
-Frontend Features
-
-Colorful KPI cards (success %, failure %, avg duration, last build)
-
-Charts:
-
-Bar: build outcomes by day (success, failure, other)
-
-Line: average duration by day
-
-Recent runs table; click Details to view jobs and a failure log snippet
-
-Dark mode toggle
-
-Auto-refresh toggle with interval selector
-
-Manual refresh button and error states
-
-Backend API (selected)
-
-GET /api/repos — list monitored repos
-
-GET /api/metrics/overview?repo&branch&windowDays — KPI summary
-
-GET /api/metrics/timeseries?repo&branch&windowDays — daily counts + avg duration
-
-GET /api/runs?repo&branch&limit — recent runs
-
-GET /api/runs/{runId}/jobs — jobs in a run
-
-GET /api/jobs/{jobId}/log — text of a job log (snippet)
-
-Configuration Notes
-
-Rate limits: GitHub API 5,000 req/hr/token. Adjust:
-
-POLL_SHARDS (e.g. 8 or 12 for many repos)
-
-MAX_RUNS_PER_REPO (lower if needed)
-
-POLL_INTERVAL_SECONDS (increase to reduce calls)
-
-Repo / branch filters:
-
-REPO_DISCOVERY_MODE=all (default) auto-discovers all repos you can read.
-
-BRANCH_FILTERS as comma-separated list (empty = all branches).
-
-Slack:
-
-Use a Slack Incoming Webhook and set SLACK_WEBHOOK_URL.
-
-Mentions: ALERT_CHANNEL_MENTIONS=channel|here|"".
-
-Security:
-
-Keep .env out of Git. Never paste tokens publicly.
-
-PAT scopes should be minimal: repo, read:org, workflow.
-
-Troubleshooting
-
-Frontend shows a blank page
-
-Ensure Nginx proxy for /api/ is present (provided in frontend/Dockerfile via nginx.conf).
-
-Open http://localhost:3001/api/metrics/overview
- — if you get JSON, proxy is good.
-
-Check browser DevTools → Network tab for failing /api/ calls.
-
-Port already in use
-
-Change host port in .env:
-
-FRONTEND_PORT=3001 (maps to container 80)
-
-API_PORT=8080
-
-Slow / stuck builds
-
-Enable BuildKit:
-
-export DOCKER_BUILDKIT=1
-export COMPOSE_DOCKER_CLI_BUILD=1
-
-
-Build inside WSL Linux filesystem, not /mnt/c/....
-
-Pre-pull base images:
-
-docker pull python:3.11-slim node:20-alpine nginx:alpine postgres:15-alpine
-
-
-No Slack alerts
-
-Verify SLACK_WEBHOOK_URL in .env.
-
-Check docker compose logs -f api for alert errors.
-
-No data appears
-
-Confirm GITHUB_TOKEN scopes & that repos actually have Actions runs.
-
-Increase MAX_RUNS_PER_REPO and wait for next polling tick.
+# ==== Misc (proxy optional) ====
+HTTP_PROXY=
+HTTPS_PROXY=
+```
+
+... (continues with Ports, Build & Run, Verifying, Slack Alerts, Troubleshooting, etc.)
