@@ -1,6 +1,16 @@
-prompt_log.txt
-Project: aws-modular-infra (Terraform modular AWS setup)
-Generated on: 2025-09-21 (Asia/Kolkata)
+Prompt:
+
+Suppose you are infra-automation engineer, I want you to provision infra on AWS cloud using terraform, which includes the above resources.
+ - create VPC with one public subnet. 
+ - create security group with inbound traffic on ports 3001 and 8080. 
+ - create ec2 instance in public subnet with public IP enabled and attach the created security group. 
+ - Install docker and docker compose on ec2. 
+NOTE : Make use of modular approach.
+
+Prompt link: https://chatgpt.com/share/68cfb332-d6dc-800f-a521-9a33f01d47c1
+
+
+
 
 1) Initial requirement (from user):
    - Role: Infra‑automation engineer
