@@ -1,0 +1,59 @@
+prompt_log.txt
+Project: aws-modular-infra (Terraform modular AWS setup)
+Generated on: 2025-09-21 (Asia/Kolkata)
+
+1) Initial requirement (from user):
+   - Role: Infra‑automation engineer
+   - Provision on AWS using Terraform with modular approach
+   - Create VPC with one public subnet
+   - Create security group with inbound ports 3001 and 8080 (SSH optional)
+   - Create EC2 instance in the public subnet with public IP
+   - Install Docker and Docker Compose on EC2
+
+2) Solution delivered:
+   - Root modules: main.tf, variables.tf, outputs.tf, terraform.tfvars
+   - Modules:
+       modules/vpc: VPC, IGW, public subnet, public route table, route
+       modules/security_group: SG allowing 3001, 8080 (22 optional via allow_ssh)
+       modules/ec2: EC2 instance with user_data.sh to install Docker & Docker Compose
+   - Defaults:
+       region            = ap-south-1
+       vpc_cidr          = 10.10.0.0/16
+       public_subnet     = 10.10.1.0/24 (ap-south-1a)
+       instance_type     = t3.micro
+       AMI               = latest Amazon Linux 2023 x86_64 (override via var.ami_id)
+       SSH               = disabled by default (enable with allow_ssh=true and key_name)
+   - Versions:
+       terraform >= 1.5.0
+       aws provider ~> 5.0
+
+3) Issue reported by user:
+   Error: Invalid single-argument block definition
+   File: modules/ec2/main.tf (filter blocks were single-line)
+
+4) Fix applied:
+   - Converted single-line filter definitions to multi-line blocks in data "aws_ami" "al2023"
+   - Repacked archive as aws-modular-infra-fixed.zip
+
+5) How to use:
+   a) terraform fmt -recursive        # optional formatting
+   b) terraform init
+   c) terraform plan -var="project_name=demo-modular" -var="region=ap-south-1"
+   d) terraform apply -auto-approve -var="project_name=demo-modular" -var="region=ap-south-1"
+
+   Outputs:
+     - instance_public_ip / instance_public_dns
+     - Use SSH only if allow_ssh=true and key_name is set:
+       ssh -i /path/to/key.pem ec2-user@<public_ip_or_dns>
+
+6) Notes:
+   - Security group opens only ports 3001 and 8080 by default; SSH is opt-in.
+   - Public IP is ensured at subnet level (map_public_ip_on_launch) and instance level (associate_public_ip_address).
+   - Docker Compose uses plugin on AL2023 (dnf) or falls back to standalone binary.
+   - Customize tags via variable default_tags and project_name.
+
+7) Changelog:
+   - v1: Initial modular setup and zip export.
+   - v1.1: Fixed HCL filter formatting in modules/ec2/main.tf; re-exported zip.
+
+End of log.
